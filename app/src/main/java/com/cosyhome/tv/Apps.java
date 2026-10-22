@@ -1,114 +1,56 @@
-package com.cosyhome.tv;
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-import android.content.ComponentName;
-import android.content.Context;
-import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
-import android.content.res.Resources;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.drawable.BitmapDrawable;
-import android.graphics.drawable.Drawable;
-import android.util.DisplayMetrics;
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+    <!-- Weather for the clock (Open-Meteo, no account). -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
-/**
- * The TV apps to show as tiles: every LEANBACK_LAUNCHER activity, one per package, dock apps
- * first in their configured order, then the pinned ones, then the rest alphabetically.
- * Banner loading follows cleanyourtv's AppAdapter (MIT, https://github.com/Gathin23/cleanyourtv).
- */
-final class Apps {
+    <!-- Android 11+ package visibility: the apps shown as tiles, and the Philips screens the chips open. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="org.droidtv.action.AMBILIGHT_OSD" />
+        </intent>
+        <intent>
+            <action android:name="android.settings.SETTINGS" />
+        </intent>
+    </queries>
 
-    static final class App {
-        final String label;
-        final String pkg;
-        final ComponentName component;
-        final Drawable banner;
-        final Drawable icon;
+    <application
+        android:label="@string/app_name"
+        android:icon="@drawable/ic_launcher"
+        android:banner="@drawable/banner"
+        android:theme="@style/Theme.Cosy"
+        android:allowBackup="false">
 
-        App(String label, ComponentName component, Drawable banner, Drawable icon) {
-            this.label = label;
-            this.pkg = component.getPackageName();
-            this.component = component;
-            this.banner = banner;
-            this.icon = icon;
-        }
-    }
-
-    private Apps() {
-    }
-
-    static List<App> load(Context ctx, List<String> dock, List<String> pinned, Set<String> hidden) {
-        PackageManager pm = ctx.getPackageManager();
-        Intent probe = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
-        List<App> apps = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
-        for (ResolveInfo ri : pm.queryIntentActivities(probe, 0)) {
-            if (ri.activityInfo == null) continue;
-            String pkg = ri.activityInfo.packageName;
-            if (pkg.equals(ctx.getPackageName()) || hidden.contains(pkg) || !seen.add(pkg)) continue;
-            ComponentName component = new ComponentName(pkg, ri.activityInfo.name);
-            String label = String.valueOf(ri.loadLabel(pm)).trim();
-            apps.add(new App(label, component, loadBanner(ctx, pm, ri), ri.loadIcon(pm)));
-        }
-        Collections.sort(apps, (a, b) -> {
-            int ra = rank(a.pkg, dock, pinned), rb = rank(b.pkg, dock, pinned);
-            if (ra != rb) return Integer.compare(ra, rb);
-            return a.label.compareToIgnoreCase(b.label);
-        });
-        return apps;
-    }
-
-    private static int rank(String pkg, List<String> dock, List<String> pinned) {
-        int d = dock.indexOf(pkg);
-        if (d >= 0) return d;
-        int p = pinned.indexOf(pkg);
-        return p >= 0 ? 100 + p : 1000;
-    }
-
-    private static Drawable loadBanner(Context ctx, PackageManager pm, ResolveInfo ri) {
-        Drawable d = null;
-        int id = ri.activityInfo.banner;
-        if (id == 0) id = ri.activityInfo.applicationInfo.banner;
-        if (id != 0) {
-            try {
-                Resources res = pm.getResourcesForApplication(ri.activityInfo.applicationInfo);
-                // At least xhdpi, so the artwork stays sharp through the focus zoom.
-                int density = Math.max(DisplayMetrics.DENSITY_XHIGH, ctx.getResources().getDisplayMetrics().densityDpi);
-                d = res.getDrawableForDensity(id, density, null);
-            } catch (PackageManager.NameNotFoundException | Resources.NotFoundException ignored) {
-            }
-        }
-        if (d == null) d = ri.activityInfo.loadBanner(pm);
-        return d == null ? null : shrink(ctx, d);
-    }
-
-    /**
-     * Redraws a banner at tile size. Some apps ship 1080p banners: kept as they are, twenty of them
-     * cost about 40 MB of bitmaps plus the same again as GPU textures, for tiles 240 px wide.
-     */
-    private static Drawable shrink(Context ctx, Drawable d) {
-        float density = ctx.getResources().getDisplayMetrics().density;
-        // The largest tile (the grid's, 120x68dp) at its 1.1x focus zoom.
-        int w = Math.round(120 * density * Tile.FOCUS_SCALE), h = Math.round(68 * density * Tile.FOCUS_SCALE);
-        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(bmp);
-        int iw = d.getIntrinsicWidth(), ih = d.getIntrinsicHeight();
-        if (iw > 0 && ih > 0) {
-            // Centre-crop, as the tile's ImageView would.
-            float scale = Math.max(w / (float) iw, h / (float) ih);
-            int sw = Math.round(iw * scale), sh = Math.round(ih * scale);
-            d.setBounds((w - sw) / 2, (h - sh) / 2, (w - sw) / 2 + sw, (h - sh) / 2 + sh);
-        } else {
-            d.setBounds(0, 0, w, h);
-        }
-        d.draw(c);
-        return new BitmapDrawable(ctx.getResources(), bmp);
-    }
-}
+        <activity
+            android:name=".HomeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:stateNotNeeded="true"
+            android:excludeFromRecents="true"
+            android:clearTaskOnLaunch="true"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|uiMode"
+            android:screenOrientation="landscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <!-- Listed in the stock launcher's app list too, so it can be opened before it owns Home. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
