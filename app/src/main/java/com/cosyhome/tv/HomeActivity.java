@@ -14,10 +14,14 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.provider.Settings;
 import android.text.format.DateFormat;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
+import android.widget.FrameLayout;
 import android.widget.GridLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -52,6 +56,9 @@ public class HomeActivity extends Activity implements SceneView.Listener {
     private LinearLayout dock, inputs;
     private GridLayout grid;
     private GlassPanel appsPanel, inputsPanel;
+    private TextView quickChip;
+    private LinearLayout quickPanel;
+    private boolean quickOpen;
 
     private List<String> dockApps, pinnedApps;
     private Set<String> hiddenApps;
@@ -148,6 +155,7 @@ public class HomeActivity extends Activity implements SceneView.Listener {
         findViewById(R.id.back).setOnKeyListener(topRow);
         findViewById(R.id.ambilight).setOnKeyListener(topRow);
         findViewById(R.id.settings).setOnKeyListener(topRow);
+        buildQuickSettings();
 
         weather.setText(weatherLine(Weather.cached(this)));
         readPhaseOverride(getIntent());
@@ -188,6 +196,10 @@ public class HomeActivity extends Activity implements SceneView.Listener {
     protected void onPause() {
         super.onPause();
         unregisterReceiver(packageReceiver);
+        if (quickOpen) {
+            quickOpen = false;
+            quickPanel.setVisibility(View.GONE);
+        }
         handler.removeCallbacks(minuteTick);
         handler.removeCallbacks(weatherTick);
         scene.setRunning(false);
@@ -206,6 +218,7 @@ public class HomeActivity extends Activity implements SceneView.Listener {
         super.onNewIntent(intent);
         readPhaseOverride(intent);
         if (intent == null || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
+        if (quickOpen) closeQuick();
         lastDock = 0;
         if (appsOpen) closeApps();
         else focusDock(0);
@@ -213,6 +226,10 @@ public class HomeActivity extends Activity implements SceneView.Listener {
 
     @Override
     public void onBackPressed() {
+        if (quickOpen) {
+            closeQuick();
+            return;
+        }
         if (appsOpen) closeApps();
         // On the clock screen Back goes nowhere: this is home.
     }
@@ -313,6 +330,7 @@ public class HomeActivity extends Activity implements SceneView.Listener {
                         openApps();
                         return true;
                     case KeyEvent.KEYCODE_DPAD_UP:
+                        quickChip.requestFocus();
                         return true;
                     case KeyEvent.KEYCODE_DPAD_LEFT:
                         return first;
@@ -363,6 +381,7 @@ public class HomeActivity extends Activity implements SceneView.Listener {
     }
 
     private void restoreFocus() {
+        if (quickOpen) return;
         if (appsOpen) focusGrid(lastGrid);
         else focusDock(lastDock);
     }
@@ -391,6 +410,151 @@ public class HomeActivity extends Activity implements SceneView.Listener {
         appsLayer.animate().alpha(0f).translationY(dp(16)).setDuration(160)
                 .withEndAction(() -> appsLayer.setVisibility(View.GONE)).start();
         focusDock(lastDock);
+    }
+
+    // ---- quick settings -----------------------------------------------------------------------------
+
+    /** A pill at the top right of the clock screen that opens a small panel of shortcuts into Settings. */
+    private void buildQuickSettings() {
+        FrameLayout home = (FrameLayout) homeLayer;
+
+        quickChip = new TextView(this, null, 0, R.style.Chip);
+        quickChip.setText("Ajustes r\u00E1pidos");
+        quickChip.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_settings, 0, 0, 0);
+        FrameLayout.LayoutParams chipLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, dp(34), Gravity.TOP | Gravity.END);
+        chipLp.topMargin = dp(27);
+        chipLp.setMarginEnd(dp(48));
+        home.addView(quickChip, chipLp);
+        quickChip.setOnClickListener(v -> {
+            if (quickOpen) closeQuick();
+            else openQuick();
+        });
+        quickChip.setOnKeyListener((v, keyCode, e) -> {
+            if (e.getAction() != KeyEvent.ACTION_DOWN) return false;
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    if (quickOpen) quickPanel.getChildAt(0).requestFocus();
+                    else focusDock(lastDock);
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_UP:
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    return true;
+                default:
+                    return false;
+            }
+        });
+
+        quickPanel = new LinearLayout(this);
+        quickPanel.setOrientation(LinearLayout.VERTICAL);
+        quickPanel.setPadding(dp(8), dp(8), dp(8), dp(8));
+        GradientDrawable panelBg = new GradientDrawable();
+        panelBg.setColor(0xE61C1C1E);
+        panelBg.setCornerRadius(dp(20));
+        panelBg.setStroke(dp(1), 0x38FFFFFF);
+        quickPanel.setBackground(panelBg);
+        quickPanel.setVisibility(View.GONE);
+        FrameLayout.LayoutParams panelLp = new FrameLayout.LayoutParams(
+                dp(230), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
+        panelLp.topMargin = dp(70);
+        panelLp.setMarginEnd(dp(48));
+        home.addView(quickPanel, panelLp);
+
+        // Restart goes last, so it is never one press away from the button that opens the panel.
+        addQuickRow("\uD83D\uDCF6", 0xFF0A84FF, "Wi-Fi y red", new Intent(Settings.ACTION_WIFI_SETTINGS));
+        addQuickRow("\uD83C\uDFA7", 0xFF5E5CE6, "Bluetooth", new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
+        addQuickRow("\uD83D\uDDA5", 0xFF30B0C7, "Pantalla", new Intent(Settings.ACTION_DISPLAY_SETTINGS));
+        addQuickRow("\uD83D\uDD0A", 0xFFFF375F, "Sonido", new Intent(Settings.ACTION_SOUND_SETTINGS));
+        addQuickRow("\u2699\uFE0F", 0xFF8E8E93, "Todos los ajustes", new Intent(Settings.ACTION_SETTINGS));
+        addQuickRow("\uD83D\uDD04", 0xFFFF9F0A, "Reiniciar", new Intent("com.android.tv.settings.REBOOT_DEVICE"));
+    }
+
+    private void addQuickRow(String glyph, int color, String label, Intent intent) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(8), dp(6), dp(12), dp(6));
+        row.setFocusable(true);
+        row.setClickable(true);
+        row.setBackground(quickRowBackground());
+
+        TextView icon = new TextView(this);
+        icon.setText(glyph);
+        icon.setTextSize(15f);
+        icon.setGravity(Gravity.CENTER);
+        GradientDrawable iconBg = new GradientDrawable();
+        iconBg.setColor(color);
+        iconBg.setCornerRadius(dp(8));
+        icon.setBackground(iconBg);
+        row.addView(icon, new LinearLayout.LayoutParams(dp(30), dp(30)));
+
+        TextView text = new TextView(this);
+        text.setText(label);
+        text.setTextColor(0xFFFFFFFF);
+        text.setTextSize(13f);
+        text.setSingleLine(true);
+        text.setTypeface(getResources().getFont(R.font.outfit));
+        LinearLayout.LayoutParams textLp = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        textLp.setMarginStart(dp(10));
+        row.addView(text, textLp);
+
+        row.setOnFocusChangeListener((v, focused) -> text.setTextColor(focused ? 0xFF111111 : 0xFFFFFFFF));
+        row.setOnClickListener(v -> {
+            closeQuick();
+            open(intent);
+        });
+        final int index = quickPanel.getChildCount();
+        row.setOnKeyListener((v, keyCode, e) -> {
+            if (e.getAction() != KeyEvent.ACTION_DOWN) return false;
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    if (index == 0) quickChip.requestFocus();
+                    return index == 0;
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    return index == quickPanel.getChildCount() - 1;
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    return true;
+                default:
+                    return false;
+            }
+        });
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        if (index > 0) rowLp.topMargin = dp(2);
+        quickPanel.addView(row, rowLp);
+    }
+
+    /** Solid white pill when focused, like the chips; clear otherwise. */
+    private StateListDrawable quickRowBackground() {
+        GradientDrawable on = new GradientDrawable();
+        on.setColor(0xFFFFFFFF);
+        on.setCornerRadius(dp(14));
+        GradientDrawable off = new GradientDrawable();
+        off.setColor(0x00000000);
+        off.setCornerRadius(dp(14));
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_focused}, on);
+        states.addState(new int[]{}, off);
+        return states;
+    }
+
+    private void openQuick() {
+        quickOpen = true;
+        quickPanel.setAlpha(0f);
+        quickPanel.setVisibility(View.VISIBLE);
+        quickPanel.animate().alpha(1f).setDuration(160).start();
+        quickPanel.getChildAt(0).requestFocus();
+    }
+
+    private void closeQuick() {
+        if (!quickOpen) return;
+        quickOpen = false;
+        quickPanel.animate().cancel();
+        quickPanel.setVisibility(View.GONE);
+        quickChip.requestFocus();
     }
 
     // ---- inputs -----------------------------------------------------------------------------------
