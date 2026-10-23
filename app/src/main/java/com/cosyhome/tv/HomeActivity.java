@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.res.ColorStateList;
 import android.media.tv.TvContract;
 import android.media.tv.TvInputInfo;
 import android.media.tv.TvInputManager;
@@ -17,12 +18,14 @@ import android.os.Looper;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.provider.Settings;
+import android.text.TextUtils;
 import android.text.format.DateFormat;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.GridLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -56,8 +59,9 @@ public class HomeActivity extends Activity implements SceneView.Listener {
     private LinearLayout dock, inputs;
     private GridLayout grid;
     private GlassPanel appsPanel, inputsPanel;
-    private TextView quickChip;
-    private LinearLayout quickPanel;
+    private TextView quickChip, quickDate, quickTime;
+    private GlassPanel quickPanel;
+    private final List<View[]> quickRows = new ArrayList<>();
     private boolean quickOpen;
 
     private List<String> dockApps, pinnedApps;
@@ -245,6 +249,7 @@ public class HomeActivity extends Activity implements SceneView.Listener {
         GlassPanel.setSource(scene.blurred(), glassTint);
         appsPanel.invalidate();
         inputsPanel.invalidate();
+        if (quickPanel != null) quickPanel.invalidate();
         int text = p == SceneView.Phase.DAY ? 0xFF12222C
                 : p == SceneView.Phase.DAWN ? 0xFFFFF8F0
                 : p == SceneView.Phase.DUSK ? 0xFFFFF4EA : 0xFFEEF0F8;
@@ -259,7 +264,9 @@ public class HomeActivity extends Activity implements SceneView.Listener {
         String hm = new SimpleDateFormat(DateFormat.is24HourFormat(this) ? "HH:mm" : "h:mm", locale).format(now);
         clock.setText(hm);
         headerTime.setText(hm);
+        quickTime.setText(hm);
         date.setText(new SimpleDateFormat(DateFormat.getBestDateTimePattern(locale, "EEEEdMMMM"), locale).format(now));
+        quickDate.setText(date.getText());
         scene.setPhase(forcedPhase != null ? forcedPhase : phaseAt(now.getTime()));
     }
 
@@ -414,7 +421,10 @@ public class HomeActivity extends Activity implements SceneView.Listener {
 
     // ---- quick settings -----------------------------------------------------------------------------
 
-    /** A pill at the top right of the clock screen that opens a small panel of shortcuts into Settings. */
+    /**
+     * A pill at the top right of the clock screen. It opens a frosted panel on the right with the
+     * date and time, a gear for every setting, and two columns of shortcuts into Settings.
+     */
     private void buildQuickSettings() {
         FrameLayout home = (FrameLayout) homeLayer;
 
@@ -434,7 +444,7 @@ public class HomeActivity extends Activity implements SceneView.Listener {
             if (e.getAction() != KeyEvent.ACTION_DOWN) return false;
             switch (keyCode) {
                 case KeyEvent.KEYCODE_DPAD_DOWN:
-                    if (quickOpen) quickPanel.getChildAt(0).requestFocus();
+                    if (quickOpen) focusQuick(1, 0);
                     else focusDock(lastDock);
                     return true;
                 case KeyEvent.KEYCODE_DPAD_UP:
@@ -446,99 +456,164 @@ public class HomeActivity extends Activity implements SceneView.Listener {
             }
         });
 
-        quickPanel = new LinearLayout(this);
-        quickPanel.setOrientation(LinearLayout.VERTICAL);
-        quickPanel.setPadding(dp(8), dp(8), dp(8), dp(8));
-        GradientDrawable panelBg = new GradientDrawable();
-        panelBg.setColor(0xE61C1C1E);
-        panelBg.setCornerRadius(dp(20));
-        panelBg.setStroke(dp(1), 0x38FFFFFF);
-        quickPanel.setBackground(panelBg);
+        quickPanel = new GlassPanel(this, null);
+        quickPanel.setPadding(dp(14), dp(12), dp(14), dp(14));
         quickPanel.setVisibility(View.GONE);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        quickPanel.addView(content, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
         FrameLayout.LayoutParams panelLp = new FrameLayout.LayoutParams(
-                dp(230), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
+                dp(300), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
         panelLp.topMargin = dp(70);
         panelLp.setMarginEnd(dp(48));
         home.addView(quickPanel, panelLp);
 
-        // Restart goes last, so it is never one press away from the button that opens the panel.
-        addQuickRow("\uD83D\uDCF6", 0xFF0A84FF, "Wi-Fi y red", new Intent(Settings.ACTION_WIFI_SETTINGS));
-        addQuickRow("\uD83C\uDFA7", 0xFF5E5CE6, "Bluetooth", new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
-        addQuickRow("\uD83D\uDDA5", 0xFF30B0C7, "Pantalla", new Intent(Settings.ACTION_DISPLAY_SETTINGS));
-        addQuickRow("\uD83D\uDD0A", 0xFFFF375F, "Sonido", new Intent(Settings.ACTION_SOUND_SETTINGS));
-        addQuickRow("\u2699\uFE0F", 0xFF8E8E93, "Todos los ajustes", new Intent(Settings.ACTION_SETTINGS));
-        addQuickRow("\uD83D\uDD04", 0xFFFF9F0A, "Reiniciar", new Intent("com.android.tv.settings.REBOOT_DEVICE"));
+        // Header: date and time on the left, a gear for every setting on the right.
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(4), 0, 0, dp(10));
+        LinearLayout when = new LinearLayout(this);
+        when.setOrientation(LinearLayout.VERTICAL);
+        quickDate = new TextView(this);
+        quickDate.setTextColor(0xD9FFFFFF);
+        quickDate.setTextSize(12f);
+        quickDate.setTypeface(getResources().getFont(R.font.outfit));
+        quickTime = new TextView(this);
+        quickTime.setTextColor(0xFFFFFFFF);
+        quickTime.setTextSize(24f);
+        quickTime.setTypeface(getResources().getFont(R.font.outfit));
+        when.addView(quickDate);
+        when.addView(quickTime);
+        header.addView(when, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        ImageView gear = new ImageView(this);
+        gear.setImageResource(R.drawable.ic_settings);
+        gear.setImageTintList(ColorStateList.valueOf(0xFFFFFFFF));
+        gear.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        gear.setPadding(dp(8), dp(8), dp(8), dp(8));
+        gear.setFocusable(true);
+        gear.setClickable(true);
+        gear.setBackground(quickTileBackground());
+        gear.setOnFocusChangeListener((v, focused) ->
+                gear.setImageTintList(ColorStateList.valueOf(focused ? 0xFF12222C : 0xFFFFFFFF)));
+        gear.setOnClickListener(v -> {
+            closeQuick();
+            open(new Intent(Settings.ACTION_SETTINGS));
+        });
+        gear.setOnKeyListener((v, keyCode, e) -> e.getAction() == KeyEvent.ACTION_DOWN && quickKey(0, 0, keyCode));
+        header.addView(gear, new LinearLayout.LayoutParams(dp(34), dp(34)));
+        content.addView(header, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        quickRows.clear();
+        quickRows.add(new View[]{gear});
+
+        // Two columns of shortcuts. Each one opens the matching Settings screen.
+        addQuickRow(content,
+                "\uD83D\uDCF6", "Wi-Fi y red", new Intent(Settings.ACTION_WIFI_SETTINGS),
+                "\uD83C\uDFA7", "Bluetooth", new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
+        addQuickRow(content,
+                "\uD83D\uDDA5", "Pantalla", new Intent(Settings.ACTION_DISPLAY_SETTINGS),
+                "\uD83D\uDD0A", "Sonido", new Intent(Settings.ACTION_SOUND_SETTINGS));
+        addQuickRow(content,
+                "\u267F\uFE0F", "Accesibilidad", new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
+                "\uD83D\uDD50", "Fecha y hora", new Intent(Settings.ACTION_DATE_SETTINGS));
     }
 
-    private void addQuickRow(String glyph, int color, String label, Intent intent) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(8), dp(6), dp(12), dp(6));
-        row.setFocusable(true);
-        row.setClickable(true);
-        row.setBackground(quickRowBackground());
+    private void addQuickRow(LinearLayout content, String glyphA, String labelA, Intent intentA,
+                             String glyphB, String labelB, Intent intentB) {
+        int row = quickRows.size();
+        LinearLayout line = new LinearLayout(this);
+        line.setOrientation(LinearLayout.HORIZONTAL);
+        View a = quickTile(row, 0, glyphA, labelA, intentA);
+        View b = quickTile(row, 1, glyphB, labelB, intentB);
+        LinearLayout.LayoutParams lpA = new LinearLayout.LayoutParams(0, dp(52), 1f);
+        LinearLayout.LayoutParams lpB = new LinearLayout.LayoutParams(0, dp(52), 1f);
+        lpB.setMarginStart(dp(8));
+        line.addView(a, lpA);
+        line.addView(b, lpB);
+        LinearLayout.LayoutParams lineLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lineLp.topMargin = dp(8);
+        content.addView(line, lineLp);
+        quickRows.add(new View[]{a, b});
+    }
+
+    private View quickTile(int row, int col, String glyph, String label, Intent intent) {
+        LinearLayout tile = new LinearLayout(this);
+        tile.setOrientation(LinearLayout.HORIZONTAL);
+        tile.setGravity(Gravity.CENTER_VERTICAL);
+        tile.setPadding(dp(12), 0, dp(10), 0);
+        tile.setFocusable(true);
+        tile.setClickable(true);
+        tile.setBackground(quickTileBackground());
 
         TextView icon = new TextView(this);
         icon.setText(glyph);
-        icon.setTextSize(15f);
+        icon.setTextSize(16f);
         icon.setGravity(Gravity.CENTER);
-        GradientDrawable iconBg = new GradientDrawable();
-        iconBg.setColor(color);
-        iconBg.setCornerRadius(dp(8));
-        icon.setBackground(iconBg);
-        row.addView(icon, new LinearLayout.LayoutParams(dp(30), dp(30)));
+        tile.addView(icon, new LinearLayout.LayoutParams(dp(26), LinearLayout.LayoutParams.WRAP_CONTENT));
 
         TextView text = new TextView(this);
         text.setText(label);
         text.setTextColor(0xFFFFFFFF);
-        text.setTextSize(13f);
+        text.setTextSize(12f);
         text.setSingleLine(true);
+        text.setEllipsize(TextUtils.TruncateAt.END);
         text.setTypeface(getResources().getFont(R.font.outfit));
         LinearLayout.LayoutParams textLp = new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        textLp.setMarginStart(dp(10));
-        row.addView(text, textLp);
+        textLp.setMarginStart(dp(8));
+        tile.addView(text, textLp);
 
-        row.setOnFocusChangeListener((v, focused) -> text.setTextColor(focused ? 0xFF111111 : 0xFFFFFFFF));
-        row.setOnClickListener(v -> {
+        tile.setOnFocusChangeListener((v, focused) -> text.setTextColor(focused ? 0xFF12222C : 0xFFFFFFFF));
+        tile.setOnClickListener(v -> {
             closeQuick();
             open(intent);
         });
-        final int index = quickPanel.getChildCount();
-        row.setOnKeyListener((v, keyCode, e) -> {
-            if (e.getAction() != KeyEvent.ACTION_DOWN) return false;
-            switch (keyCode) {
-                case KeyEvent.KEYCODE_DPAD_UP:
-                    if (index == 0) quickChip.requestFocus();
-                    return index == 0;
-                case KeyEvent.KEYCODE_DPAD_DOWN:
-                    return index == quickPanel.getChildCount() - 1;
-                case KeyEvent.KEYCODE_DPAD_LEFT:
-                case KeyEvent.KEYCODE_DPAD_RIGHT:
-                    return true;
-                default:
-                    return false;
-            }
-        });
-        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        if (index > 0) rowLp.topMargin = dp(2);
-        quickPanel.addView(row, rowLp);
+        tile.setOnKeyListener((v, keyCode, e) -> e.getAction() == KeyEvent.ACTION_DOWN && quickKey(row, col, keyCode));
+        return tile;
     }
 
-    /** Solid white pill when focused, like the chips; clear otherwise. */
-    private StateListDrawable quickRowBackground() {
+    /** Frosted at rest, solid light when focused: the same language as the chips. */
+    private StateListDrawable quickTileBackground() {
         GradientDrawable on = new GradientDrawable();
-        on.setColor(0xFFFFFFFF);
-        on.setCornerRadius(dp(14));
+        on.setColor(0xF2FFFFFF);
+        on.setCornerRadius(dp(16));
         GradientDrawable off = new GradientDrawable();
-        off.setColor(0x00000000);
-        off.setCornerRadius(dp(14));
+        off.setColor(0x33FFFFFF);
+        off.setCornerRadius(dp(16));
         StateListDrawable states = new StateListDrawable();
         states.addState(new int[]{android.R.attr.state_focused}, on);
         states.addState(new int[]{}, off);
         return states;
+    }
+
+    /** D-pad moves exactly one cell and never leaves the panel, except Up from the gear to the pill. */
+    private boolean quickKey(int row, int col, int keyCode) {
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+                if (col > 0) focusQuick(row, col - 1);
+                return true;
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                if (col < quickRows.get(row).length - 1) focusQuick(row, col + 1);
+                return true;
+            case KeyEvent.KEYCODE_DPAD_UP:
+                if (row == 0) quickChip.requestFocus();
+                else focusQuick(row - 1, col);
+                return true;
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                if (row < quickRows.size() - 1) focusQuick(row + 1, col);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void focusQuick(int row, int col) {
+        View[] cells = quickRows.get(Math.max(0, Math.min(row, quickRows.size() - 1)));
+        cells[Math.max(0, Math.min(col, cells.length - 1))].requestFocus();
     }
 
     private void openQuick() {
@@ -546,7 +621,7 @@ public class HomeActivity extends Activity implements SceneView.Listener {
         quickPanel.setAlpha(0f);
         quickPanel.setVisibility(View.VISIBLE);
         quickPanel.animate().alpha(1f).setDuration(160).start();
-        quickPanel.getChildAt(0).requestFocus();
+        focusQuick(1, 0);
     }
 
     private void closeQuick() {
